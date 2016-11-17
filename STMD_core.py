@@ -108,7 +108,7 @@ class STMD_Gibbs_Sampler:
             for m in range(self.numSentence[d]):
                 t = sampleFromCategorical(topicDistribution)
                 # s = sampleFromCategorical(sentimentDistribution[t, :])
-                s = self.docSentiment[d] # sentiment를 할당
+                s = self.docSentiment[d]
                 self.topics[(d, m)] = t  # d 문서의 m번째 문장의 topic
                 self.sentiments[(d, m)] = s  # d 문서의 m 번째 문장의 sentiment
                 self.ns_d[d] += 1
@@ -154,6 +154,18 @@ class STMD_Gibbs_Sampler:
                 # vocab = self.vectorizer.get_feature_names()
                 print(t, s, [self.idx2word[i] for i in topWordIndices])
 
+    def getTopKWordsSentiments(self, K):
+        """
+        K 개 sentiment별 top
+        """
+        lst = []
+        normalizer = np.sum(pseudocounts, (1))
+        word_prob = normalizer / np.sum(normalizer, 0)
+        for s in range(self.numSentiments):
+            topWordIndices = word_prob[:, s].argsort()[::-1][:K]
+            lst.append([s, [self.idx2word[i] for i in topWordIndices]])
+        print(lst)
+
     def getTopKWords(self, K):
         """
         Returns top K discriminative words for topic t and sentiment s
@@ -168,7 +180,7 @@ class STMD_Gibbs_Sampler:
         for t in range(self.numTopics):
             for s in range(self.numSentiments):
                 topWordIndices = pseudocounts[:, t, s].argsort()[-1:-(K + 1):-1]
-                df['topic_' + str(t + 1) + '_' + sentiment_name[s]] = [sampler.idx2word[i] for i in topWordIndices]
+                df['topic_' + str(t + 1) + '_' + sentiment_name[s]] = [self.idx2word[i] for i in topWordIndices]
         return df
 
     def getTopic(self, d):
@@ -186,13 +198,23 @@ class STMD_Gibbs_Sampler:
                (self.ns_dk[d] + self.numSentiments * self.gamma)[:, np.newaxis]  # dim (K x L)
         return ((theta_d[:, np.newaxis] * pi_d).sum(axis=0))
 
-    def run(self, reviews, maxIters=10):
+    def classify_senti(self, pos_neg_sentence_indices, sentiment_label):
+        doc_sent_inference = []
+        for i in range(5000):
+            if i in pos_neg_sentence_indices:
+                doc_sent_inference.append(np.argmax(self.getDocSentiment(i)))
+        infer_arr = np.array(doc_sent_inference)
+        answer = np.array(sentiment_label)
+        return np.mean(infer_arr == answer)
+
+    def run(self, reviews, pos_neg_sentence_indices, sentiment_label, maxIters=10):
         self._initialize_(reviews)
         numDocs = len(self.doc_sent_word_dict.keys())
 
         for iteration in range(maxIters):
-            if (iteration + 1) % 10 == 0:
+            if (iteration + 1) % 2 == 0:
                 print("Starting iteration %d of %d" % (iteration + 1, maxIters))
+                print(self.classify_senti(pos_neg_sentence_indices, sentiment_label))
             for d in range(numDocs):
                 for m in range(self.numSentence[d]):
                     t = self.topics[(d, m)]
@@ -208,6 +230,9 @@ class STMD_Gibbs_Sampler:
                     ind = sampleFromCategorical(probabilities_ts.flatten())
                     t, s = np.unravel_index(ind, probabilities_ts.shape)
                     self.topics[(d, m)] = t
+                    # sentiment를 반은 supervise, 반은 sampling
+                    b = np.random.binomial(1, 0.5)
+                    s = (1 - b) * s + b * self.docSentiment[d]
                     self.sentiments[(d, m)] = s
                     self.ns_d[d] += 1
                     self.ns_dkl[d, t, s] += 1
