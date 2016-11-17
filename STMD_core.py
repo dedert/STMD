@@ -219,10 +219,10 @@ class STMD_Gibbs_Sampler:
 
 # run
 work_path = "/media/hs-ubuntu/data/dataset/MasterThesis/"
-data = pd.read_csv(work_path + "elec_df_brand2vec.csv",nrows =1000)
-data['reviewSentence'] = data.reviewSentence.apply(lambda row: literal_eval(row))
-data['reviewSentence_tagged'] = data.reviewSentence_tagged.apply(lambda row: literal_eval(row))
-tagged_text_list = list(data['reviewSentence_tagged'])
+data = pd.read_csv(work_path + "elec_df_preprocessed.csv",nrows =1000)
+samsung = data[data['brand'] == 'Samsung']
+samsung['preprocessed'] = samsung.preprocessed.apply(lambda row: literal_eval(row))
+tagged_text_list = list(samsung['reviewSentence_tagged'])
 sampler = STMD_Gibbs_Sampler(numTopics=10, alpha=0.01, beta=0.01, gamma=1, numSentiments=2)
 sampler._initialize_(tagged_text_list)
 sampler.run(tagged_text_list)
