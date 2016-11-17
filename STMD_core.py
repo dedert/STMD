@@ -156,7 +156,7 @@ class STMD_Gibbs_Sampler:
 
     def getTopKWordsSentiments(self, K):
         """
-        K 개 sentiment별 top
+        K 개 sentiment별 top words
         """
         lst = []
         normalizer = np.sum(pseudocounts, (1))
