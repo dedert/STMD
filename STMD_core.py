@@ -53,6 +53,7 @@ class STMD_Gibbs_Sampler:
         doc_sent_word_dict = {}  # key: 문서 index, value : [[list of sent1 단어의 index], [list of sent2 단어의 index]...]
         numSentence = {}  # key : 문서 index, value : 해당 문서의 문장수
         wordCountSentence = {}  # key : 문서 index, value : 해당 문서의 각 문장별 word count
+        docSentiment = {}
         for index, review in enumerate(reviews):
             doc_sent_lst = []
             doc_sent_count = []
@@ -64,12 +65,13 @@ class STMD_Gibbs_Sampler:
             numSentence[index] = len(doc_sent_lst)
             doc_sent_word_dict[index] = doc_sent_lst
             wordCountSentence[index] = doc_sent_count
+            docSentiment[index] = sentiment_list[index]
 
-        return word2idx, idx2word, doc_sent_word_dict, wordCountSentence, numSentence
+        return word2idx, idx2word, doc_sent_word_dict, wordCountSentence, numSentence, docSentiment
 
     def _initialize_(self, reviews):
-        self.word2idx, self.idx2word, self.doc_sent_word_dict, self.wordCountSentence, self.numSentence = self.build_dataset(
-            reviews)
+        self.word2idx, self.idx2word, self.doc_sent_word_dict, self.wordCountSentence, \
+        self.numSentence, self.docSentiment = self.build_dataset(reviews)
         numDocs = len(self.doc_sent_word_dict.keys())
         vocabSize = len(self.word2idx.keys())
 
@@ -105,7 +107,8 @@ class STMD_Gibbs_Sampler:
 
             for m in range(self.numSentence[d]):
                 t = sampleFromCategorical(topicDistribution)
-                s = sampleFromCategorical(sentimentDistribution[t, :])
+                # s = sampleFromCategorical(sentimentDistribution[t, :])
+                s = self.docSentiment[d] # sentiment를 할당
                 self.topics[(d, m)] = t  # d 문서의 m번째 문장의 topic
                 self.sentiments[(d, m)] = s  # d 문서의 m 번째 문장의 sentiment
                 self.ns_d[d] += 1
@@ -156,26 +159,32 @@ class STMD_Gibbs_Sampler:
         Returns top K discriminative words for topic t and sentiment s
         ie words v for which p(v | t, s) is maximum
         """
+        topic_name = ['topic_' + str(i + 1) for i in range(sampler.numTopics)]
+        sentiment_name = ['neg', 'pos']  # 1 이 긍정
         pseudocounts = np.copy(self.n_wkl)
         normalizer = np.sum(pseudocounts, (0))
         pseudocounts /= normalizer[np.newaxis, :, :]
+        df = pd.DataFrame()
         for t in range(self.numTopics):
             for s in range(self.numSentiments):
                 topWordIndices = pseudocounts[:, t, s].argsort()[-1:-(K + 1):-1]
-                # vocab = self.vectorizer.get_feature_names()
-                print(t, s, [self.idx2word[i] for i in topWordIndices])
+                df['topic_' + str(t + 1) + '_' + sentiment_name[s]] = [sampler.idx2word[i] for i in topWordIndices]
+        return df
 
     def getTopic(self, d):
+        topic_name = ['topic_' + str(i + 1) for i in range(sampler.numTopics)]
+        df = pd.DataFrame(columns=topic_name)
         theta_d = (self.ns_dk[d, :] + self.alpha) / \
                   (self.ns_d[d] + self.numTopics * self.alpha)  # dim(K x 1)
-        print(theta_d)
+        df.loc[len(df)] = theta_d
+        return df
 
     def getDocSentiment(self, d):
         theta_d = (self.ns_dk[d, :] + self.alpha) / \
                   (self.ns_d[d] + self.numTopics * self.alpha)  # dim(K x 1)
         pi_d = (self.ns_dkl[d, :, :] + self.gamma) / \
                (self.ns_dk[d] + self.numSentiments * self.gamma)[:, np.newaxis]  # dim (K x L)
-        print((theta_d[:, np.newaxis] * pi_d).sum(axis=0))
+        return ((theta_d[:, np.newaxis] * pi_d).sum(axis=0))
 
     def run(self, reviews, maxIters=10):
         self._initialize_(reviews)
