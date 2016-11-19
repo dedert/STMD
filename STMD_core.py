@@ -5,6 +5,7 @@ from ast import literal_eval
 from collections import Counter
 from scipy.optimize import fmin_l_bfgs_b
 import optimizeTopicVectors as ot
+from preprocess import *
 
 def sampleFromDirichlet(alpha):
     return np.random.dirichlet(alpha)
@@ -27,16 +28,17 @@ def word_indices(doc_sent_word_dict, sent_index):
 
 
 class STMD_Gibbs_Sampler:
-    def __init__(self, wordVectors, numTopics, alpha, beta, gamma, max_vocab_size=10000, max_sentence=50, numSentiments=2):
+    def __init__(self, wordVectors, numTopics, alpha, beta, gamma, s=0.5, max_sentence=50, numSentiments=2):
         self.wordVectors = wordVectors # (V x H)
         self.numTopics = numTopics
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         self.numSentiments = numSentiments
-        self.MAX_VOCAB_SIZE = max_vocab_size
+        #self.MAX_VOCAB_SIZE = max_vocab_size
         self.maxSentence = max_sentence
         self.dimension = self.wordVectors.shape[1]  # H
+        self.s = s
 
     def build_dataset(self, reviews, sentiment_list):
         """
@@ -46,8 +48,8 @@ class STMD_Gibbs_Sampler:
         corpus = [word for review in reviews for sentence in review for word in sentence]
         text = nltk.Text(corpus)
         freq = nltk.FreqDist(text)
-        keywords = [tup[0] for tup in freq.most_common(self.MAX_VOCAB_SIZE)]  # 많이 등장한 단어 선택
-
+        #keywords = [tup[0] for tup in freq.most_common(self.MAX_VOCAB_SIZE)]  # 많이 등장한 단어 선택
+        keywords = [tup[0] for tup in freq.most_common(self.wordVectors.shape[0])]  # 많이 등장한 단어 선택
         word2idx = {}  # key : 단어, value : index
         for index, key in enumerate(keywords):
             word2idx[key] = index
@@ -131,9 +133,11 @@ class STMD_Gibbs_Sampler:
         probabilities_ts = np.ones((self.numTopics, self.numSentiments))
 
         # firstfactor 수정
+        b = np.random.binomial(1, self.s)
+
         firstFactor = (self.n_wkl[w, :, :] + self.beta) / \
                       (self.n_kl + self.n_wkl.shape[0] * self.beta)  # dim(K x L)
-
+        firstFactor2 = ot.softmax()
         secondFactor = (self.ns_dk[d, :] + self.alpha) / \
                        (self.ns_d[d] + self.numTopics * self.alpha)  # dim(K x 1)
 

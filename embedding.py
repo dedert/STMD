@@ -8,6 +8,7 @@ from preprocess import *
 
 data_path = "/media/hs-ubuntu/data/dataset/Amazon/"
 work_path = "/media/hs-ubuntu/data/dataset/MasterThesis/"
+save_path = "/media/hs-ubuntu/data/dataset/MasterThesis/gensim_models/"
 data = pd.read_csv(work_path + "elec_df_preprocessed.csv")
 
 
@@ -38,3 +39,5 @@ for epoch in tqdm(range(passes)):
     model.train(bigram_documents)
     model.alpha -= 0.002  # decrease the learning rate
     model.min_alpha = model.alpha  # fix the learning rate, no decay
+
+model.save(save_path + "model_" + str(w) + "_" + str(s))

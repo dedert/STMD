@@ -42,7 +42,7 @@ def prepare(data, col_name ='preprocessed'):
                 index += 1
     return sentence_list, sentiment_label, sentence_senti_label, pos_neg_sentence_indices, pos_neg_sentiment_label, numSentence
 
-def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, threshold = 10):
+def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, threshold = 10, min_count=5):
     """
     sentence 만 들어있는 list(flatten)를 다시 문서, 문장모양의 list로 변환
     :param sentence_list: 문장 list
@@ -50,7 +50,7 @@ def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, thresh
     :param threshold: bigram의 threshold
     :return:
     """
-    bigram = Phrases(sentences=sentence_list, threshold=threshold)
+    bigram = Phrases(sentences=sentence_list, threshold=threshold, min_count=min_count)
     total_token = []
     documents = []
     sentence_list_again = []
