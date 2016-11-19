@@ -3,7 +3,8 @@ import nltk
 import pandas as pd
 from ast import literal_eval
 from collections import Counter
-
+from scipy.optimize import fmin_l_bfgs_b
+import optimizeTopicVectors as ot
 
 def sampleFromDirichlet(alpha):
     return np.random.dirichlet(alpha)
@@ -26,14 +27,16 @@ def word_indices(doc_sent_word_dict, sent_index):
 
 
 class STMD_Gibbs_Sampler:
-    def __init__(self, numTopics, alpha, beta, gamma, max_vocab_size=10000, max_sentence=50, numSentiments=2):
+    def __init__(self, wordVectors, numTopics, alpha, beta, gamma, max_vocab_size=10000, max_sentence=50, numSentiments=2):
+        self.wordVectors = wordVectors # (V x H)
+        self.numTopics = numTopics
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
-        self.numTopics = numTopics
         self.numSentiments = numSentiments
         self.MAX_VOCAB_SIZE = max_vocab_size
         self.maxSentence = max_sentence
+        self.dimension = wordVectors.shape[1]  # H
 
     def build_dataset(self, reviews):
         """
@@ -76,6 +79,7 @@ class STMD_Gibbs_Sampler:
         self.vocabSize = len(self.word2idx.keys())
         self.pos_neg_sentence_indices = pos_neg_sentence_indices
         self.pos_neg_sentiment_label = pos_neg_sentiment_label
+        self.topicVectors = ot.orthogonal_matrix((self.numTopics, self.dimension))
 
         # Pseudocounts
         self.n_wkl = np.zeros((self.vocabSize, self.numTopics, self.numSentiments))  # 단어 i가 topic k, senti l로 할당된 수
@@ -89,16 +93,6 @@ class STMD_Gibbs_Sampler:
 
         alphaVec = self.alpha * np.ones(self.numTopics)
         gammaVec = self.gamma * np.ones(self.numSentiments)
-        # 기존 sentiment-lda에서는 sentiment wordnet을 이용해서 priorsentiment를 줬는데,
-        # word2vec은 classvector와 유사성을 이용해서 해도 괜찮을듯
-        #         for i, word in enumerate(self.vectorizer.get_feature_names()):
-        #             synsets = swn.senti_synsets(word)
-        #             posScore = np.mean([s.pos_score() for s in synsets])
-        #             negScore = np.mean([s.neg_score() for s in synsets])
-        #             if posScore >= 0.1 and posScore > negScore:
-        #                 self.priorSentiment[i] = 1
-        #             elif negScore >= 0.1 and negScore > posScore:
-        #                 self.priorSentiment[i] = 0
 
         for d in range(self.numDocs):
             topicDistribution = sampleFromDirichlet(alphaVec)
@@ -119,6 +113,15 @@ class STMD_Gibbs_Sampler:
                 for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):  # d번째 문서의 m번째 문장의 단어를 돌면서
                     self.n_wkl[w, t, s] += 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
                     self.n_kl[t, s] += 1  # topic k, senti l로 할당된 단어 수
+
+    def updateTopicVectors(self, lamda = 0.01):
+        t = self.topicVectors # (K, H)
+        for i in range(self.numTopics):
+            x0 = t[i, :]
+            x, f, d = fmin_l_bfgs_b(ot.loss, x0, fprime=ot.grad, args=(sampler.n_wkl, wordVectors, lamda), maxiter=15000)
+            t[i, :] = x
+        self.topicVectors = t
+
 
     def conditionalDistribution(self, d, m, w):
         """
