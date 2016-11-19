@@ -11,9 +11,9 @@ def prepare(data, col_name ='preprocessed'):
     :return: documents, sentence_list, sentence_senti_label, sentence_position, numSentence
     """
     sentence_list = [] #문장단위 list
+    sentiment_label = []  # 각 문장의 긍, 부정 index
     sentence_senti_label = {} #각 문장의 긍,부정 label
-    pos_neg_sentence_indices = [] #긍, 부정 문장의 index, 중립은 None -> 나중에 긍,부정리뷰 안에 있는 문장만 추출하기 위해
-    sentiment_label = [] #각 문장의 긍, 부정 index
+    pos_neg_sentence_indices = []  # 긍, 부정 문장의 index, 중립은 None -> 나중에 긍,부정리뷰 안에 있는 문장만 추출하기 위해
     pos_neg_sentiment_label = [] #sentiment_label에 해당하는 문장의 긍,부정 labe(1:긍정, 0:부정)
     numSentence = {} #key : doc_index, value : num of sentences in doc_index
     index = 0
@@ -23,23 +23,24 @@ def prepare(data, col_name ='preprocessed'):
         if row['overall']>=4:
             pos_neg_sentence_indices.append(doc_index)
             pos_neg_sentiment_label.append(1)
-            for sent_index, sentence in enumerate(row[col_name]):
+            sentiment_label.append(1)
+            for i in row[col_name]:
                 sentence_senti_label[index]='positive'
-                sentiment_label.append(1)
                 index += 1
         elif row['overall'] == 3:
             pos_neg_sentence_indices.append(None)
-            for sent_index, sentence in enumerate(row[col_name]):
+            sentiment_label.append(0)
+            for i in row[col_name]:
                 sentence_senti_label[index]='neutral'
                 index += 1
         else:
             pos_neg_sentence_indices.append(doc_index)
             pos_neg_sentiment_label.append(0)
-            for sent_index, sentence in enumerate(row[col_name]):
+            sentiment_label.append(0)
+            for i in row[col_name]:
                 sentence_senti_label[index]='negative'
-                sentiment_label.append(0)
                 index += 1
-    return sentence_list, sentence_senti_label, pos_neg_sentence_indices, pos_neg_sentiment_label, numSentence
+    return sentence_list, sentiment_label, sentence_senti_label, pos_neg_sentence_indices, pos_neg_sentiment_label, numSentence
 
 def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, threshold = 10):
     """

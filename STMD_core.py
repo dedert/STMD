@@ -36,9 +36,9 @@ class STMD_Gibbs_Sampler:
         self.numSentiments = numSentiments
         self.MAX_VOCAB_SIZE = max_vocab_size
         self.maxSentence = max_sentence
-        self.dimension = wordVectors.shape[1]  # H
+        self.dimension = self.wordVectors.shape[1]  # H
 
-    def build_dataset(self, reviews):
+    def build_dataset(self, reviews, sentiment_list):
         """
         :param reviews: 리뷰 데이터 [ [[문서1의 문장1],[문서1의 문장2]], [[문서2의 문장1],[문서2의 문장2]], ...]]
         :return:
@@ -72,9 +72,9 @@ class STMD_Gibbs_Sampler:
 
         return word2idx, idx2word, doc_sent_word_dict, wordCountSentence, numSentence, docSentiment
 
-    def _initialize_(self, reviews, pos_neg_sentence_indices, pos_neg_sentiment_label):
+    def _initialize_(self, reviews, pos_neg_sentence_indices, pos_neg_sentiment_label, sentiment_list):
         self.word2idx, self.idx2word, self.doc_sent_word_dict, self.wordCountSentence, \
-        self.numSentence, self.docSentiment = self.build_dataset(reviews)
+        self.numSentence, self.docSentiment = self.build_dataset(reviews, sentiment_list)
         self.numDocs = len(self.doc_sent_word_dict.keys())
         self.vocabSize = len(self.word2idx.keys())
         self.pos_neg_sentence_indices = pos_neg_sentence_indices
