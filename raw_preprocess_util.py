@@ -1,4 +1,3 @@
-%matplotlib inline
 import gzip
 import pandas as pd
 from pandas import DataFrame
@@ -7,6 +6,7 @@ import nltk
 from nltk.tokenize import sent_tokenize
 from ast import literal_eval
 from nltk.stem.porter import PorterStemmer
+import re
 
 
 def parse(path):
@@ -127,6 +127,7 @@ def sentence_postag(reviewSentence):
     형태소 분석 by sentence
     tokenize : nltk.word_tokenize + '.','/' 으로 분할
     """
+    re_split = re.compile('[/.-]')
     tokenize = [nltk.word_tokenize(sent) for sent in reviewSentence]
     tokenize2 = []
     for sent in tokenize:
@@ -151,12 +152,21 @@ def preprocessing(tagged_by_Sentence):
     4. stopword 제거
     5. stemming
     """
+    from nltk.corpus import stopwords
+    stopwords = stopwords.words('english')
+    stopwords.remove("not")
+    stopwords.remove('very')
+    stopwords.append("'m")
+    stopwords.append("'s")
+
+    re_special = re.compile('[^A-Za-z0-9]+')  # 문자,숫자 제외한 나머지
+    re_num = re.compile('[0-9]+')  # 숫자
     st = PorterStemmer()
     new_sent = []
     not_indice = []
 
     for sent in tagged_by_Sentence:
-        text = [(tup[0].lower(), tup[1]) for tup in sent if not bool(reg_special.match(tup[0]))]  # 1. 특수문자 제거, 소문자
+        text = [(tup[0].lower(), tup[1]) for tup in sent if not bool(re_special.match(tup[0]))]  # 1. 특수문자 제거, 소문자
 
         # 2. not, n't 랑 다음단어 합치기
         # not, n't 가 나오면 다음 단어랑 합치고, 그 다음 단어의 index를 저장해놨다가 del_element_by_indice 함수에서 제거
@@ -164,13 +174,13 @@ def preprocessing(tagged_by_Sentence):
         for index, tup in enumerate(text):
             if tup[0] == "n't" or tup[0] == "not":
                 if index + 1 < len(text):
-                    if not bool(reg_special.match(text[index + 1][0])) or text[index + 1][1] != 'CD':
+                    if not bool(re_special.match(text[index + 1][0])) or text[index + 1][1] != 'CD':
                         new_text.append("not_" + st.stem(text[index + 1][0]))
                         not_indice.append(index)
                 else:
                     new_text.append("not")
             else:
-                if not bool(reg_num.match(tup[0])) or tup[1] != 'CD': # 3. 특수문자, 숫자 제거
+                if not bool(re_num.match(tup[0])) or tup[1] != 'CD': # 3. 특수문자, 숫자 제거
                     new_text.append(tup[0])
         new_text = del_element_by_indice(new_text, not_indice)
 

@@ -1,4 +1,3 @@
-import numpy as np
 from gensim.models import Phrases
 from gensim.models.doc2vec import TaggedDocument
 
@@ -22,8 +21,8 @@ def prepare(data, col_name ='preprocessed'):
         numSentence[doc_index] = len(row[col_name])
         if row['overall']>=4:
             pos_neg_sentence_indices.append(doc_index)
-            pos_neg_sentiment_label.append(1)
-            sentiment_label.append(1)
+            pos_neg_sentiment_label.append(0)
+            sentiment_label.append(0)
             for i in row[col_name]:
                 sentence_senti_label[index]='positive'
                 index += 1
@@ -35,8 +34,8 @@ def prepare(data, col_name ='preprocessed'):
                 index += 1
         else:
             pos_neg_sentence_indices.append(doc_index)
-            pos_neg_sentiment_label.append(0)
-            sentiment_label.append(0)
+            pos_neg_sentiment_label.append(1)
+            sentiment_label.append(1)
             for i in row[col_name]:
                 sentence_senti_label[index]='negative'
                 index += 1

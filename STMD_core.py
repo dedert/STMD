@@ -92,7 +92,7 @@ class STMD_Gibbs_Sampler:
         self.ns_dk = np.zeros((self.numDocs, self.numTopics))  # 문서 d에서 topic k로 할당된 문장 수
         self.topics = {}
         self.sentiments = {}
-        # self.priorSentiment = {}
+        self.pos_score_dict = {}
 
         alphaVec = self.alpha * np.ones(self.numTopics)
         gammaVec = self.gamma * np.ones(self.numSentiments)
@@ -106,8 +106,11 @@ class STMD_Gibbs_Sampler:
 
             for m in range(self.numSentence[d]):
                 t = sampleFromCategorical(topicDistribution)
-                # s = sampleFromCategorical(sentimentDistribution[t, :])
-                s = self.docSentiment[d]
+                s = sampleFromCategorical(sentimentDistribution[t, :])
+                # s = self.docSentiment[d]
+                pos_score = np.dot(self.sentimentVector,
+                                   self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1)
+                self.pos_score_dict[(d,m)] = np.argmax(pos_score)
                 self.topics[(d, m)] = t  # d 문서의 m번째 문장의 topic
                 self.sentiments[(d, m)] = s  # d 문서의 m 번째 문장의 sentiment
                 self.ns_d[d] += 1
@@ -126,6 +129,7 @@ class STMD_Gibbs_Sampler:
         self.topicVectors = t
 
 
+
     def conditionalDistribution(self, d, m):
         """
         Calculates the (topic, sentiment) probability for sentence m in document d
@@ -133,7 +137,7 @@ class STMD_Gibbs_Sampler:
         """
         probabilities_ts = np.ones((self.numTopics, self.numSentiments))
 
-        # firstfactor 수정
+        #firstfactor 수정
         prob = 1
         for word_idx in sampler.doc_sent_word_dict[d][m]:
             for i in range(sampler.wordCountSentence[d][m][word_idx]):
@@ -256,6 +260,8 @@ class STMD_Gibbs_Sampler:
                     # sentiment를 반은 supervise, 반은 sampling
                     # b = np.random.binomial(1, 0.5)
                     # s = (1 - b) * s + b * self.docSentiment[d]
+
+                    s = self.pos_score_dict[(d,m)]
                     self.sentiments[(d, m)] = s
                     self.ns_d[d] += 1
                     self.ns_dkl[d, t, s] += 1
