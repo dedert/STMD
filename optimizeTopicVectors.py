@@ -32,7 +32,7 @@ def loss(topicVec, n_wkl, W, lamda = 0.01):
 def grad(topicVec, n_wkl, W, lamda = 0.01):
     word_count = np.sum(n_wkl, (1,2)).reshape(1,-1)
     score = np.dot(W, topicVec)
-    first_factor = np.dot(word_count, W - (_softmax(score).reshape(-1,1) * W)) #(1,100)
+    first_factor = np.dot(word_count, W - (softmax(score).reshape(-1,1) * W)) #(1,100)
     regular = 2 * lamda * topicVec #(100,1)
     grad = - first_factor.reshape(-1,1) + regular.reshape(-1,1)
     return np.squeeze(grad)

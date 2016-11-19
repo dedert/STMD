@@ -28,7 +28,7 @@ def word_indices(doc_sent_word_dict, sent_index):
 
 
 class STMD_Gibbs_Sampler:
-    def __init__(self, wordVectors, numTopics, alpha, beta, gamma, s=0.5, max_sentence=50, numSentiments=2):
+    def __init__(self, wordVectors, sentimentVector, numTopics, alpha, beta, gamma, binary=0.5, max_sentence=50, numSentiments=2):
         self.wordVectors = wordVectors # (V x H)
         self.numTopics = numTopics
         self.alpha = alpha
@@ -38,7 +38,8 @@ class STMD_Gibbs_Sampler:
         #self.MAX_VOCAB_SIZE = max_vocab_size
         self.maxSentence = max_sentence
         self.dimension = self.wordVectors.shape[1]  # H
-        self.s = s
+        self.binary = binary
+        self.sentimentVector = sentimentVector # (L x H)
 
     def build_dataset(self, reviews, sentiment_list):
         """
@@ -125,7 +126,7 @@ class STMD_Gibbs_Sampler:
         self.topicVectors = t
 
 
-    def conditionalDistribution(self, d, m, w):
+    def conditionalDistribution(self, d, m):
         """
         Calculates the (topic, sentiment) probability for sentence m in document d
         Returns:    a matrix (numTopics x numSentiments) storing the probabilities
@@ -133,11 +134,24 @@ class STMD_Gibbs_Sampler:
         probabilities_ts = np.ones((self.numTopics, self.numSentiments))
 
         # firstfactor 수정
-        b = np.random.binomial(1, self.s)
+        prob = 1
+        for word_idx in sampler.doc_sent_word_dict[d][m]:
+            for i in range(sampler.wordCountSentence[d][m][word_idx]):
+                prob *= sampler.n_wkl[word_idx, :, :] + sampler.beta + sampler.wordCountSentence[d][m][word_idx] - 1 - i
+                prob /= prob.sum()
 
-        firstFactor = (self.n_wkl[w, :, :] + self.beta) / \
-                      (self.n_kl + self.n_wkl.shape[0] * self.beta)  # dim(K x L)
-        firstFactor2 = ot.softmax()
+        firstFactor = prob # dim(K x L)
+        # firstFactor1 = (self.n_wkl[w, :, :] + self.beta) / \
+        #               (self.n_kl + self.n_wkl.shape[0] * self.beta)  # dim(K x L)
+
+        # wordSoftmax = ot.softmax(np.dot(self.topicVectors, sampler.wordVectors.T))
+        # sentiSoftmax = ot.softmax(np.dot(sentimentVector, sampler.wordVectors.T))
+        # firstFactor2 = np.dot(wordSoftmax, sentiSoftmax.T)
+        # firstFactor2 /= firstFactor2.sum() # (K x L)
+        #
+        # firstFactor = (self.binary * firstFactor1) * ((1-self.binary) * firstFactor2)
+        # firstFactor /= np.sum(firstFactor)
+
         secondFactor = (self.ns_dk[d, :] + self.alpha) / \
                        (self.ns_d[d] + self.numTopics * self.alpha)  # dim(K x 1)
 
@@ -220,6 +234,7 @@ class STMD_Gibbs_Sampler:
         #self._initialize_(reviews)
 
         for iteration in range(maxIters):
+            self.updateTopicVectors()
             if (iteration + 1) % 2 == 0:
                 print("Starting iteration %d of %d" % (iteration + 1, maxIters))
                 print(self.classify_senti())
@@ -234,13 +249,13 @@ class STMD_Gibbs_Sampler:
                         self.n_wkl[w, t, s] -= 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
                         self.n_kl[t, s] -= 1  # topic k, senti l로 할당된 단어 수
 
-                    probabilities_ts = self.conditionalDistribution(d, m, w)
+                    probabilities_ts = self.conditionalDistribution(d, m)
                     ind = sampleFromCategorical(probabilities_ts.flatten())
                     t, s = np.unravel_index(ind, probabilities_ts.shape)
                     self.topics[(d, m)] = t
                     # sentiment를 반은 supervise, 반은 sampling
-                    b = np.random.binomial(1, 0.5)
-                    s = (1 - b) * s + b * self.docSentiment[d]
+                    # b = np.random.binomial(1, 0.5)
+                    # s = (1 - b) * s + b * self.docSentiment[d]
                     self.sentiments[(d, m)] = s
                     self.ns_d[d] += 1
                     self.ns_dkl[d, t, s] += 1
