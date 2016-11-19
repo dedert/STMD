@@ -69,18 +69,20 @@ class STMD_Gibbs_Sampler:
 
         return word2idx, idx2word, doc_sent_word_dict, wordCountSentence, numSentence, docSentiment
 
-    def _initialize_(self, reviews):
+    def _initialize_(self, reviews, pos_neg_sentence_indices, pos_neg_sentiment_label):
         self.word2idx, self.idx2word, self.doc_sent_word_dict, self.wordCountSentence, \
         self.numSentence, self.docSentiment = self.build_dataset(reviews)
-        numDocs = len(self.doc_sent_word_dict.keys())
-        vocabSize = len(self.word2idx.keys())
+        self.numDocs = len(self.doc_sent_word_dict.keys())
+        self.vocabSize = len(self.word2idx.keys())
+        self.pos_neg_sentence_indices = pos_neg_sentence_indices
+        self.pos_neg_sentiment_label = pos_neg_sentiment_label
 
         # Pseudocounts
-        self.n_wkl = np.zeros((vocabSize, self.numTopics, self.numSentiments))  # 단어 i가 topic k, senti l로 할당된 수
+        self.n_wkl = np.zeros((self.vocabSize, self.numTopics, self.numSentiments))  # 단어 i가 topic k, senti l로 할당된 수
         self.n_kl = np.zeros((self.numTopics, self.numSentiments))  # topic k, senti l로 할당된 단어 수
-        self.ns_d = np.zeros((numDocs))  # 문서 d의 문장 수
-        self.ns_dkl = np.zeros((numDocs, self.numTopics, self.numSentiments))  # 문서 d에서 topic k, sentiment l로 할당된 문장 수
-        self.ns_dk = np.zeros((numDocs, self.numTopics))  # 문서 d에서 topic k로 할당된 문장 수
+        self.ns_d = np.zeros((self.numDocs))  # 문서 d의 문장 수
+        self.ns_dkl = np.zeros((self.numDocs, self.numTopics, self.numSentiments))  # 문서 d에서 topic k, sentiment l로 할당된 문장 수
+        self.ns_dk = np.zeros((self.numDocs, self.numTopics))  # 문서 d에서 topic k로 할당된 문장 수
         self.topics = {}
         self.sentiments = {}
         # self.priorSentiment = {}
@@ -98,7 +100,7 @@ class STMD_Gibbs_Sampler:
         #             elif negScore >= 0.1 and negScore > posScore:
         #                 self.priorSentiment[i] = 0
 
-        for d in range(numDocs):
+        for d in range(self.numDocs):
             topicDistribution = sampleFromDirichlet(alphaVec)
             sentimentDistribution = np.zeros((self.numTopics, self.numSentiments))
 
@@ -198,24 +200,23 @@ class STMD_Gibbs_Sampler:
                (self.ns_dk[d] + self.numSentiments * self.gamma)[:, np.newaxis]  # dim (K x L)
         return ((theta_d[:, np.newaxis] * pi_d).sum(axis=0))
 
-    def classify_senti(self, pos_neg_sentence_indices, sentiment_label):
+    def classify_senti(self):
         doc_sent_inference = []
-        for i in range(5000):
-            if i in pos_neg_sentence_indices:
+        for i in range(self.numDocs):
+            if i in self.pos_neg_sentence_indices:
                 doc_sent_inference.append(np.argmax(self.getDocSentiment(i)))
         infer_arr = np.array(doc_sent_inference)
-        answer = np.array(sentiment_label)
+        answer = np.array(self.pos_neg_sentiment_label)
         return np.mean(infer_arr == answer)
 
-    def run(self, reviews, pos_neg_sentence_indices, sentiment_label, maxIters=10):
-        self._initialize_(reviews)
-        numDocs = len(self.doc_sent_word_dict.keys())
+    def run(self, reviews, maxIters=10):
+        #self._initialize_(reviews)
 
         for iteration in range(maxIters):
             if (iteration + 1) % 2 == 0:
                 print("Starting iteration %d of %d" % (iteration + 1, maxIters))
-                print(self.classify_senti(pos_neg_sentence_indices, sentiment_label))
-            for d in range(numDocs):
+                print(self.classify_senti())
+            for d in range(self.numDocs):
                 for m in range(self.numSentence[d]):
                     t = self.topics[(d, m)]
                     s = self.sentiments[(d, m)]
