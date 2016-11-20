@@ -124,49 +124,94 @@ class STMD_Gibbs_Sampler:
         t = self.topicVectors # (K, H)
         for i in range(self.numTopics):
             x0 = t[i, :]
-            x, f, d = fmin_l_bfgs_b(ot.loss, x0, fprime=ot.grad, args=(sampler.n_wkl, wordVectors, lamda), maxiter=15000)
+            x, f, d = fmin_l_bfgs_b(ot.loss, x0, fprime=ot.grad, args=(self.n_wkl, wordVectors, lamda), maxiter=15000)
             t[i, :] = x
         self.topicVectors = t
 
 
+    def sampling(self, d, m):
+        t = self.topics[(d, m)]
+        s = self.sentiments[(d, m)]
+        self.ns_d[d] -= 1
+        self.ns_dkl[d, t, s] -= 1
+        self.ns_dk[d, t] -= 1
+        for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):
+            self.n_wkl[w, t, s] -= 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
+            self.n_kl[t, s] -= 1  # topic k, senti l로 할당된 단어 수
 
-    def conditionalDistribution(self, d, m):
-        """
-        Calculates the (topic, sentiment) probability for sentence m in document d
-        Returns:    a matrix (numTopics x numSentiments) storing the probabilities
-        """
-        probabilities_ts = np.ones((self.numTopics, self.numSentiments))
+        firstFactor = np.ones((self.numTopics, self.numSentiments))
 
-        #firstfactor 수정
-        prob = 1
-        for word_idx in sampler.doc_sent_word_dict[d][m]:
-            for i in range(sampler.wordCountSentence[d][m][word_idx]):
-                prob *= sampler.n_wkl[word_idx, :, :] + sampler.beta + sampler.wordCountSentence[d][m][word_idx] - 1 - i
-                prob /= prob.sum()
+        word_count = self.wordCountSentence[d][m]
+        for t in range(self.numTopics):
+            for s in range(self.numSentiments):
+                beta0 = self.n_kl[t][s] + self.beta
+                m0 = 0
+                for word in word_count.keys():
+                    betaw = self.n_wkl[word, t, s] + self.beta
+                    cnt = word_count[word]
+                    for i in range(cnt):
+                        firstFactor[t][s] *= (betaw + i) / (beta0 + m0)
+                        m0 += 1
 
-        firstFactor = prob # dim(K x L)
+        topic_similarity = ot.softmax(np.dot(self.topicVectors,
+                                             self.wordVectors[
+                                                 self.doc_sent_word_dict[d][m]].T))  # ( K x num words in sentence)
+        senti_similarity = ot.softmax(np.dot(self.sentimentVector,
+                                             self.wordVectors[
+                                                 self.doc_sent_word_dict[d][m]].T))  # ( L x num words in sentence)
+        vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T))
 
-        # firstFactor1 = (self.n_wkl[w, :, :] + self.beta) / \
-        #               (self.n_kl + self.n_wkl.shape[0] * self.beta)  # dim(K x L)
-
-        # wordSoftmax = ot.softmax(np.dot(self.topicVectors, sampler.wordVectors.T))
-        # sentiSoftmax = ot.softmax(np.dot(sentimentVector, sampler.wordVectors.T))
-        # firstFactor2 = np.dot(wordSoftmax, sentiSoftmax.T)
-        # firstFactor2 /= firstFactor2.sum() # (K x L)
-        #
-        # firstFactor = (self.binary * firstFactor1) * ((1-self.binary) * firstFactor2)
-        # firstFactor /= np.sum(firstFactor)
+        firstFactor = firstFactor *  vector_similarity # dim(K x L)
 
         secondFactor = (self.ns_dk[d, :] + self.alpha) / \
                        (self.ns_d[d] + self.numTopics * self.alpha)  # dim(K x 1)
 
         thirdFactor = (self.ns_dkl[d, :, :] + self.gamma) / \
-                      (self.ns_dk[d] + self.numSentiments * self.gamma)[:, np.newaxis]  # dim (K x L)
+                      (self.ns_dk[d] + self.numSentiments * self.gamma)[:, np.newaxis]
 
-        probabilities_ts *= firstFactor * thirdFactor
-        probabilities_ts *= secondFactor[:, np.newaxis]
-        probabilities_ts /= np.sum(probabilities_ts)
-        return probabilities_ts
+        prob = np.ones((self.numTopics, self.numSentiments))
+        prob *= firstFactor * thirdFactor
+        prob *= secondFactor[:, np.newaxis]
+        prob /= np.sum(prob)
+
+        ind = sampleFromCategorical(prob.flatten())
+        t, s = np.unravel_index(ind, prob.shape)
+
+        self.topics[(d, m)] = t
+        self.sentiments[(d, m)] = s
+        self.ns_d[d] += 1
+        self.ns_dkl[d, t, s] += 1
+        self.ns_dk[d, t] += 1
+        for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):
+            self.n_wkl[w, t, s] += 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
+            self.n_kl[t, s] += 1  # topic k, senti l로 할당된 단어 수
+
+    def calculatePhi(self):
+        firstFactor = (self.n_wkl + self.beta) / \
+                      np.expand_dims(self.n_kl + self.n_wkl.shape[0] * self.beta, axis=0)
+
+        topic_similarity = ot.softmax(np.dot(self.topicVectors,
+                                             self.wordVectors.T))  # ( K x V)
+        senti_similarity = ot.softmax(np.dot(self.sentimentVector,
+                                             self.wordVectors.T))  # ( L x V)
+        vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T)) # K x L
+
+        firstFactor = firstFactor * np.expand_dims(vector_similarity, axis=0)
+        firstFactor /= firstFactor.sum()
+        return firstFactor
+
+    def calculateTheta(self):
+        secondFactor = (self.ns_dk + self.alpha) / \
+                       np.expand_dims(self.ns_d + self.numTopics * self.alpha, axis=1)  # dim(K x 1)
+        secondFactor /= secondFactor.sum()
+        return secondFactor
+
+    def calculatePi(self):
+        thirdFactor = (self.ns_dkl + self.gamma) / \
+                      np.expand_dims(self.ns_dk + self.numSentiments * self.gamma, axis=2)
+        thirdFactor /= thirdFactor.sum()
+        return thirdFactor
+
 
     def getTopKWordsByLikelihood(self, K):
         """
@@ -182,107 +227,144 @@ class STMD_Gibbs_Sampler:
                 # vocab = self.vectorizer.get_feature_names()
                 print(t, s, [self.idx2word[i] for i in topWordIndices])
 
-    def getTopKWordsSentiments(self, K):
+    def getTopKWordsByTS(self, K):
         """
         K 개 sentiment별 top words
         """
-        lst = []
-        normalizer = np.sum(pseudocounts, (1))
-        word_prob = normalizer / np.sum(normalizer, 0)
-        for s in range(self.numSentiments):
-            topWordIndices = word_prob[:, s].argsort()[::-1][:K]
-            lst.append([s, [self.idx2word[i] for i in topWordIndices]])
-        print(lst)
+        # lst = []
+        # normalizer = np.sum(pseudocounts, (1))
+        # word_prob = normalizer / np.sum(normalizer, 0)
+        # for s in range(self.numSentiments):
+        #     topWordIndices = word_prob[:, s].argsort()[::-1][:K]
+        #     lst.append([s, [self.idx2word[i] for i in topWordIndices]])
+        # print(lst)
+        topic_sentiment_arr = self.calculatePhi()
+        dic = {}
+        for t in range(self.numTopics):
+            for s in range(self.numSentiments):
+                index_list = np.argsort(-topic_sentiment_arr[:, t, s])[:10]
+                if s == 0:
+                    name = "p"
+                else:
+                    name = "n"
+                dic['topic_' + '{:02d}'.format(t + 1) + '_' + name] = [self.idx2word[index] for index in index_list]
+        return pd.DataFrame(dic)
 
-    def getTopKWords(self, K):
+    def getTopKWordsByTopic(self, K):
         """
         Returns top K discriminative words for topic t and sentiment s
         ie words v for which p(v | t, s) is maximum
         """
-        topic_name = ['topic_' + str(i + 1) for i in range(sampler.numTopics)]
-        sentiment_name = ['neg', 'pos']  # 1 이 긍정
-        pseudocounts = np.copy(self.n_wkl)
-        normalizer = np.sum(pseudocounts, (0))
-        pseudocounts /= normalizer[np.newaxis, :, :]
-        df = pd.DataFrame()
+        # topic_name = ['topic_' + str(i + 1) for i in range(self.numTopics)]
+        # sentiment_name = ['neg', 'pos']  # 1 이 긍정
+        # pseudocounts = np.copy(self.n_wkl)
+        # normalizer = np.sum(pseudocounts, (0))
+        # pseudocounts /= normalizer[np.newaxis, :, :]
+        # df = pd.DataFrame()
+        # for t in range(self.numTopics):
+        #     for s in range(self.numSentiments):
+        #         topWordIndices = pseudocounts[:, t, s].argsort()[-1:-(K + 1):-1]
+        #         df['topic_' + str(t + 1) + '_' + sentiment_name[s]] = [self.idx2word[i] for i in topWordIndices]
+        dic = {}
+        phi = self.calculatePhi()
+        topic_arr = np.sum(phi, (2))
         for t in range(self.numTopics):
-            for s in range(self.numSentiments):
-                topWordIndices = pseudocounts[:, t, s].argsort()[-1:-(K + 1):-1]
-                df['topic_' + str(t + 1) + '_' + sentiment_name[s]] = [self.idx2word[i] for i in topWordIndices]
-        return df
+            index_list = np.argsort(-topic_arr[:, t])[:K]
+            dic["Topic"+str(t+1)] = [self.idx2word[index] for index in index_list]
+        return pd.DataFrame(dic)
 
-    def getTopic(self, d):
-        topic_name = ['topic_' + str(i + 1) for i in range(sampler.numTopics)]
-        df = pd.DataFrame(columns=topic_name)
-        theta_d = (self.ns_dk[d, :] + self.alpha) / \
-                  (self.ns_d[d] + self.numTopics * self.alpha)  # dim(K x 1)
-        df.loc[len(df)] = theta_d
-        return df
+    def getTopicDist(self, d):
+        theta = self.calculateTheta()[d]
+        return theta
 
-    def getDocSentiment(self, d):
-        theta_d = (self.ns_dk[d, :] + self.alpha) / \
-                  (self.ns_d[d] + self.numTopics * self.alpha)  # dim(K x 1)
-        pi_d = (self.ns_dkl[d, :, :] + self.gamma) / \
-               (self.ns_dk[d] + self.numSentiments * self.gamma)[:, np.newaxis]  # dim (K x L)
-        return ((theta_d[:, np.newaxis] * pi_d).sum(axis=0))
+    def getDocSentimentDist(self, d):
+        pi = self.calculatePi()[d].T
+        theta = self.calculateTheta()[d]
+        doc_sentiment_prob = np.dot(pi, theta)
+        doc_sentiment_prob /= doc_sentiment_prob.sum()
+        return doc_sentiment_prob
+
+    def getTopWordsBySenti(self, K):
+        dic = {}
+        phi = self.calculatePhi()
+        senti_arr = np.sum(phi, (1))
+        for s in range(self.numSentiments):
+            index_list = np.argsort(-senti_arr[:, s])[:K]
+            if s == 0:
+                name = "p"
+            else:
+                name = "n"
+            dic["Sentiment_"+ name] = [self.idx2word[index] for index in index_list]
+        return pd.DataFrame(dic)
 
     def classify_senti(self):
         doc_sent_inference = []
         for i in range(self.numDocs):
             if i in self.pos_neg_sentence_indices:
-                doc_sent_inference.append(np.argmax(self.getDocSentiment(i)))
+                doc_sent_inference.append(np.argmax(self.getDocSentimentDist(i)))
         infer_arr = np.array(doc_sent_inference)
         answer = np.array(self.pos_neg_sentiment_label)
         return np.mean(infer_arr == answer)
 
-    def run(self, reviews, maxIters=10):
-        #self._initialize_(reviews)
-
+    def run2(self, reviews, maxIters=10):
         for iteration in range(maxIters):
             self.updateTopicVectors()
             if (iteration + 1) % 2 == 0:
                 print("Starting iteration %d of %d" % (iteration + 1, maxIters))
                 print(self.classify_senti())
+
             for d in range(self.numDocs):
                 for m in range(self.numSentence[d]):
-                    t = self.topics[(d, m)]
-                    s = self.sentiments[(d, m)]
-                    self.ns_d[d] -= 1
-                    self.ns_dkl[d, t, s] -= 1
-                    self.ns_dk[d, t] -= 1
-                    for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):
-                        self.n_wkl[w, t, s] -= 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
-                        self.n_kl[t, s] -= 1  # topic k, senti l로 할당된 단어 수
+                    self.sampling(d, m)
 
-                    probabilities_ts = self.conditionalDistribution(d, m)
-                    # ind = sampleFromCategorical(probabilities_ts.flatten())
-                    # t, s = np.unravel_index(ind, probabilities_ts.shape)
-                    # topic_score = np.dot(self.topicVectors, self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1)
-                    # t_from_topic = sampleFromCategorical(ot.softmax(topic_score))
-                    # b = np.random.binomial(1, self.binary)
-                    # self.topics[(d, m)] = (1-b)*t + b*(t_from_topic)
-
-                    topic_similarity = ot.softmax(np.dot(self.topicVectors,
-                                              self.wordVectors[self.doc_sent_word_dict[d][m]].T)) #( K x num words in sentence)
-                    senti_similarity = ot.softmax(np.dot(self.sentimentVector,
-                                              self.wordVectors[self.doc_sent_word_dict[d][m]].T)) #( L x num words in sentence)
-                    vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T))
-
-
-                    # 그래서 원래 모델의 probabilities_ts와 vector로부터 계산한 확률을 조합
-                    result = probabilities_ts * vector_similarity
-                    result /= result.sum()
-                    ind = sampleFromCategorical(result.flatten())
-                    t,s = np.unravel_index(ind, result.shape)
-                    # s = self.pos_score_dict[(d,m)]
-                    self.topics[(d,m)] = t
-                    self.sentiments[(d, m)] = s
-                    self.ns_d[d] += 1
-                    self.ns_dkl[d, t, s] += 1
-                    self.ns_dk[d, t] += 1
-                    for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):
-                        self.n_wkl[w, t, s] += 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
-                        self.n_kl[t, s] += 1  # topic k, senti l로 할당된 단어 수
+    # def run(self, reviews, maxIters=10):
+    #     #self._initialize_(reviews)
+    #
+    #     for iteration in range(maxIters):
+    #         self.updateTopicVectors()
+    #         if (iteration + 1) % 2 == 0:
+    #             print("Starting iteration %d of %d" % (iteration + 1, maxIters))
+    #             print(self.classify_senti())
+    #         for d in range(self.numDocs):
+    #             for m in range(self.numSentence[d]):
+    #                 t = self.topics[(d, m)]
+    #                 s = self.sentiments[(d, m)]
+    #                 self.ns_d[d] -= 1
+    #                 self.ns_dkl[d, t, s] -= 1
+    #                 self.ns_dk[d, t] -= 1
+    #                 for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):
+    #                     self.n_wkl[w, t, s] -= 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
+    #                     self.n_kl[t, s] -= 1  # topic k, senti l로 할당된 단어 수
+    #
+    #                 probabilities_ts = self.conditionalDistribution(d, m)
+    #                 # ind = sampleFromCategorical(probabilities_ts.flatten())
+    #                 # t, s = np.unravel_index(ind, probabilities_ts.shape)
+    #                 # topic_score = np.dot(self.topicVectors, self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1)
+    #                 # t_from_topic = sampleFromCategorical(ot.softmax(topic_score))
+    #                 # b = np.random.binomial(1, self.binary)
+    #                 # self.topics[(d, m)] = (1-b)*t + b*(t_from_topic)
+    #
+    #                 topic_similarity = ot.softmax(np.dot(self.topicVectors,
+    #                                           self.wordVectors[self.doc_sent_word_dict[d][m]].T)) #( K x num words in sentence)
+    #                 senti_similarity = ot.softmax(np.dot(self.sentimentVector,
+    #                                           self.wordVectors[self.doc_sent_word_dict[d][m]].T)) #( L x num words in sentence)
+    #                 vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T))
+    #
+    #
+    #                 # 그래서 원래 모델의 probabilities_ts와 vector로부터 계산한 확률을 조합
+    #                 result = probabilities_ts * vector_similarity
+    #                 result /= result.sum()
+    #                 ind = sampleFromCategorical(result.flatten())
+    #                 t,s = np.unravel_index(ind, result.shape)
+    #                 # s = self.pos_score_dict[(d,m)]
+    #                 self.topics[(d,m)] = t
+    #                 self.sentiments[(d, m)] = s
+    #                 self.ns_d[d] += 1
+    #                 self.ns_dkl[d, t, s] += 1
+    #                 self.ns_dk[d, t] += 1
+    #                 for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):
+    #                     self.n_wkl[w, t, s] += 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
+    #                     self.n_kl[t, s] += 1  # topic k, senti l로 할당된 단어 수
 
 
 # run
