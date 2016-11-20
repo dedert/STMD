@@ -1,5 +1,6 @@
 from gensim.models import Phrases
 from gensim.models.doc2vec import TaggedDocument
+import nltk
 
 def prepare(data, col_name ='preprocessed'):
     """
@@ -41,7 +42,7 @@ def prepare(data, col_name ='preprocessed'):
                 index += 1
     return sentence_list, sentiment_label, sentence_senti_label, pos_neg_sentence_indices, pos_neg_sentiment_label, numSentence
 
-def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, threshold = 10, min_count=5):
+def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, min_sentence_length =2, max_vocab = 5000, threshold = 10, min_count=5):
     """
     sentence 만 들어있는 list(flatten)를 다시 문서, 문장모양의 list로 변환
     :param sentence_list: 문장 list
@@ -49,20 +50,33 @@ def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, thresh
     :param threshold: bigram의 threshold
     :return:
     """
+
     bigram = Phrases(sentences=sentence_list, threshold=threshold, min_count=min_count)
+    numDocs = len(numSentence.keys())
     total_token = []
+    for i in range(numDocs):
+        num_sentence = numSentence[i]
+        for num_s in range(num_sentence):
+            total_token.append(bigram[sentence_list[i+num_s]])
+    corpus = [word for sentence in total_token for word in sentence]
+    text = nltk.Text(corpus)
+    freq = nltk.FreqDist(text)
+    keywords = [tup[0] for tup in freq.most_common(max_vocab)]
+
     documents = []
     sentence_list_again = []
-    numDocs = len(numSentence.keys())
+
     for i in range(numDocs):
         num_sentence = numSentence[i]
         doc_list = []
         for num_s in range(num_sentence):
             bi = bigram[sentence_list[i+num_s]]
-            doc_list.append(bi)
-            document = TaggedDocument(words=bi, tags=[sentence_senti_label[i]])
-            documents.append(document)
-            total_token.append(bi)
+            if len(bi) >= min_sentence_length: #문장 길이가 2 이상인 것만 추출
+                bi = [word for word in bi if word in keywords] #keywords에 속한 단어만 추출
+                doc_list.append(bi)
+                document = TaggedDocument(words=bi, tags=[sentence_senti_label[i]])
+                documents.append(document)
+                total_token.append(bi)
         sentence_list_again.append(doc_list)
     return documents, sentence_list_again, bigram, total_token
 

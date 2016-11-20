@@ -145,6 +145,7 @@ class STMD_Gibbs_Sampler:
                 prob /= prob.sum()
 
         firstFactor = prob # dim(K x L)
+
         # firstFactor1 = (self.n_wkl[w, :, :] + self.beta) / \
         #               (self.n_kl + self.n_wkl.shape[0] * self.beta)  # dim(K x L)
 
@@ -254,14 +255,27 @@ class STMD_Gibbs_Sampler:
                         self.n_kl[t, s] -= 1  # topic k, senti l로 할당된 단어 수
 
                     probabilities_ts = self.conditionalDistribution(d, m)
-                    ind = sampleFromCategorical(probabilities_ts.flatten())
-                    t, s = np.unravel_index(ind, probabilities_ts.shape)
-                    self.topics[(d, m)] = t
-                    # sentiment를 반은 supervise, 반은 sampling
-                    # b = np.random.binomial(1, 0.5)
-                    # s = (1 - b) * s + b * self.docSentiment[d]
+                    # ind = sampleFromCategorical(probabilities_ts.flatten())
+                    # t, s = np.unravel_index(ind, probabilities_ts.shape)
+                    # topic_score = np.dot(self.topicVectors, self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1)
+                    # t_from_topic = sampleFromCategorical(ot.softmax(topic_score))
+                    # b = np.random.binomial(1, self.binary)
+                    # self.topics[(d, m)] = (1-b)*t + b*(t_from_topic)
 
-                    s = self.pos_score_dict[(d,m)]
+                    topic_similarity = ot.softmax(np.dot(self.topicVectors,
+                                              self.wordVectors[self.doc_sent_word_dict[d][m]].T)) #( K x num words in sentence)
+                    senti_similarity = ot.softmax(np.dot(self.sentimentVector,
+                                              self.wordVectors[self.doc_sent_word_dict[d][m]].T)) #( L x num words in sentence)
+                    vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T))
+
+
+                    # 그래서 원래 모델의 probabilities_ts와 vector로부터 계산한 확률을 조합
+                    result = probabilities_ts * vector_similarity
+                    result /= result.sum()
+                    ind = sampleFromCategorical(result.flatten())
+                    t,s = np.unravel_index(ind, result.shape)
+                    # s = self.pos_score_dict[(d,m)]
+                    self.topics[(d,m)] = t
                     self.sentiments[(d, m)] = s
                     self.ns_d[d] += 1
                     self.ns_dkl[d, t, s] += 1
