@@ -54,10 +54,13 @@ def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, max_vo
     bigram = Phrases(sentences=sentence_list, threshold=threshold, min_count=min_count)
     numDocs = len(numSentence.keys())
     total_token = []
+    count = 0
     for i in range(numDocs):
         num_sentence = numSentence[i]
         for num_s in range(num_sentence):
-            total_token.append(bigram[sentence_list[i+num_s]])
+            total_token.append(bigram[sentence_list[count]])
+            count += 1
+
     corpus = [word for sentence in total_token for word in sentence]
     text = nltk.Text(corpus)
     freq = nltk.FreqDist(text)
@@ -66,17 +69,19 @@ def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, max_vo
     documents = []
     sentence_list_again = []
 
+    count = 0
     for i in range(numDocs):
         num_sentence = numSentence[i]
         doc_list = []
         for num_s in range(num_sentence):
-            bi = bigram[sentence_list[i+num_s]]
+            bi = bigram[sentence_list[count]]
             bi = [word for word in bi if word in keywords]  # keywords에 속한 단어만 추출
             if len(bi) >= 1: #문장 길이가 1 이상인 것만 추출
                 doc_list.append(bi)
-                document = TaggedDocument(words=bi, tags=[sentence_senti_label[i]])
+                document = TaggedDocument(words=bi, tags=[sentence_senti_label[count]])
                 documents.append(document)
                 total_token.append(bi)
+            count += 1
         sentence_list_again.append(doc_list)
 
     return documents, sentence_list_again, bigram
