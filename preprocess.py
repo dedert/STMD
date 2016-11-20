@@ -68,7 +68,7 @@ def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, max_vo
 
     documents = []
     sentence_list_again = []
-
+    documents_label = []
     count = 0
     for i in range(numDocs):
         num_sentence = numSentence[i]
@@ -79,11 +79,12 @@ def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, max_vo
             if len(bi) >= 1: #문장 길이가 1 이상인 것만 추출
                 doc_list.append(bi)
                 document = TaggedDocument(words=bi, tags=[sentence_senti_label[count]])
+                documents_label.append(sentence_senti_label[count])
                 documents.append(document)
                 total_token.append(bi)
             count += 1
         sentence_list_again.append(doc_list)
 
-    return documents, sentence_list_again, bigram
+    return documents, sentence_list_again, bigram, documents_label
 
 

@@ -1,7 +1,5 @@
 import numpy as np
-import nltk
 import pandas as pd
-from ast import literal_eval
 from collections import Counter
 from scipy.optimize import fmin_l_bfgs_b
 import optimizeTopicVectors as ot
@@ -123,7 +121,7 @@ class ASUM:
         t = self.topicVectors # (K, H)
         for i in range(self.numTopics):
             x0 = t[i, :]
-            x, f, d = fmin_l_bfgs_b(ot.loss, x0, fprime=ot.grad, args=(self.n_wkl, wordVectors, lamda), maxiter=15000)
+            x, f, d = fmin_l_bfgs_b(ot.loss, x0, fprime=ot.grad, args=(self.n_wkl, self.wordVectors, lamda), maxiter=15000)
             t[i, :] = x
         self.topicVectors = t
 
@@ -152,16 +150,6 @@ class ASUM:
                         firstFactor[t][s] *= (betaw + i) / (beta0 + m0)
                         m0 += 1
 
-        # topic_similarity = ot.softmax(np.dot(self.topicVectors,
-        #                                      self.wordVectors[
-        #                                          self.doc_sent_word_dict[d][m]].T))  # ( K x num words in sentence)
-        # senti_similarity = ot.softmax(np.dot(self.sentimentVector,
-        #                                      self.wordVectors[
-        #                                          self.doc_sent_word_dict[d][m]].T))  # ( L x num words in sentence)
-        # vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T))
-        #
-        # firstFactor = firstFactor *  vector_similarity # dim(K x L)
-
         secondFactor = (self.ns_dl[d, :] + self.alpha) / \
                        (self.ns_d[d] + self.numTopics * self.alpha)  # dim(L x 1)
 
@@ -188,15 +176,6 @@ class ASUM:
     def calculatePhi(self):
         firstFactor = (self.n_wkl + self.beta) / \
                       np.expand_dims(self.n_kl + self.n_wkl.shape[0] * self.beta, axis=0)
-
-        # topic_similarity = ot.softmax(np.dot(self.topicVectors,
-        #                                      self.wordVectors.T))  # ( K x V)
-        # senti_similarity = ot.softmax(np.dot(self.sentimentVector,
-        #                                      self.wordVectors.T))  # ( L x V)
-        # vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T)) # K x L
-        #
-        # firstFactor = firstFactor * np.expand_dims(vector_similarity, axis=0)
-        # firstFactor /= firstFactor.sum()
         return firstFactor
 
     def calculateTheta(self):
@@ -223,7 +202,6 @@ class ASUM:
         for t in range(self.numTopics):
             for s in range(self.numSentiments):
                 topWordIndices = pseudocounts[:, t, s].argsort()[-1:-(K + 1):-1]
-                # vocab = self.vectorizer.get_feature_names()
                 print(t, s, [self.idx2word[i] for i in topWordIndices])
 
     def getTopKWordsByTS(self, K):
@@ -234,7 +212,7 @@ class ASUM:
         dic = {}
         for t in range(self.numTopics):
             for s in range(self.numSentiments):
-                index_list = np.argsort(-topic_sentiment_arr[:, t, s])[:10]
+                index_list = np.argsort(-topic_sentiment_arr[:, t, s])[:K]
                 if s == 0:
                     name = "p"
                 else:
@@ -281,12 +259,24 @@ class ASUM:
         answer = np.array(self.pos_neg_sentiment_label)
         return np.mean(infer_arr == answer)
 
-    def run(self, reviews, maxIters=10):
+    def save(self, iteration, path):
+        phi = self.calculatePhi()
+        theta = self.calculateTheta()
+        pi = self.calculatePi()
+        name = path + "_topic_" + '{:03d}'.format(self.numTopics) + '_iter_' + str(iteration+1)
+        np.save(name + "_phi", phi)
+        np.save(name + "_theta", theta)
+        np.save(name + "_pi", pi)
+
+    def run(self, reviews, save_path, print_iter=2, save_iter = 5, maxIters=10):
         for iteration in range(maxIters):
             self.updateTopicVectors()
-            if (iteration + 1) % 2 == 0:
+            if (iteration + 1) % print_iter == 0:
                 print("Starting iteration %d of %d" % (iteration + 1, maxIters))
                 print(self.classify_senti())
+            if (iteration + 1) % save_iter == 0:
+                print("Starting save model")
+                self.save(iteration, save_path)
 
             for d in range(self.numDocs):
                 for m in range(self.numSentence[d]):
