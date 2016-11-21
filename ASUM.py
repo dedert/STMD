@@ -26,18 +26,15 @@ def word_indices(doc_sent_word_dict, sent_index):
 
 
 class ASUM:
-    def __init__(self, wordVectors, sentimentVector, numTopics, alpha, beta, gamma, binary=0.5, max_sentence=50, numSentiments=2):
-        self.wordVectors = wordVectors # (V x H)
+    def __init__(self, pos_seed, neg_seed, numTopics, alpha, beta, gamma, max_sentence=50, numSentiments=2):
+        self.pos_seed = pos_seed
+        self.neg_seed = neg_seed
         self.numTopics = numTopics
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         self.numSentiments = numSentiments
-        #self.MAX_VOCAB_SIZE = max_vocab_size
         self.maxSentence = max_sentence
-        self.dimension = self.wordVectors.shape[1]  # H
-        self.binary = binary
-        self.sentimentVector = sentimentVector # (L x H)
 
     def build_dataset(self, reviews, sentiment_list):
         """
@@ -47,8 +44,7 @@ class ASUM:
         corpus = [word for review in reviews for sentence in review for word in sentence]
         text = nltk.Text(corpus)
         freq = nltk.FreqDist(text)
-        #keywords = [tup[0] for tup in freq.most_common(self.MAX_VOCAB_SIZE)]  # 많이 등장한 단어 선택
-        keywords = [tup[0] for tup in freq.most_common(self.wordVectors.shape[0])]  # 많이 등장한 단어 선택
+        keywords = [tup[0] for tup in freq.most_common(len(freq.keys()))]  # 많이 등장한 단어순으로 index
         word2idx = {}  # key : 단어, value : index
         for index, key in enumerate(keywords):
             word2idx[key] = index
@@ -80,14 +76,13 @@ class ASUM:
         self.vocabSize = len(self.word2idx.keys())
         self.pos_neg_sentence_indices = pos_neg_sentence_indices
         self.pos_neg_sentiment_label = pos_neg_sentiment_label
-        self.topicVectors = ot.orthogonal_matrix((self.numTopics, self.dimension))
 
         # Pseudocounts
         self.n_wkl = np.zeros((self.vocabSize, self.numTopics, self.numSentiments))  # 단어 i가 topic k, senti l로 할당된 수
         self.n_kl = np.zeros((self.numTopics, self.numSentiments))  # topic k, senti l로 할당된 단어 수
         self.ns_d = np.zeros((self.numDocs))  # 문서 d의 문장 수
         self.ns_dkl = np.zeros((self.numDocs, self.numTopics, self.numSentiments))  # 문서 d에서 topic k, sentiment l로 할당된 문장 수
-        self.ns_dl = np.zeros((self.numDocs, self.numSentiments))  # 문서 d에서 topic k로 할당된 문장 수
+        self.ns_dl = np.zeros((self.numDocs, self.numSentiments))  # 문서 d에서 sentiment l로 할당된 문장 수
         self.topics = {}
         self.sentiments = {}
 
@@ -103,11 +98,27 @@ class ASUM:
 
             for m in range(self.numSentence[d]):
                 t = sampleFromCategorical(topicDistribution)
-                # s = sampleFromCategorical(sentimentDistribution[t, :])
-                # s = self.docSentiment[d]
-                pos_score = np.dot(self.sentimentVector,
-                                   self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1)
-                s = np.argmax(pos_score)
+                count = 0
+                pos_senti = 0
+                neg_senti = 0
+                for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):
+                    if w in self.pos_seed:
+                        pos_senti += 1
+                        count += 1
+                    elif w in self.neg_seed:
+                        neg_senti += 1
+                        count += 1
+
+                if count == 0:
+                    s = sampleFromCategorical(sentimentDistribution[t, :])
+                else:
+                    if pos_senti == neg_senti:
+                        s = sampleFromCategorical(sentimentDistribution[t, :])
+                    elif pos_senti > neg_senti:
+                        s = 0
+                    else:
+                        s = 1
+
                 self.topics[(d, m)] = t  # d 문서의 m번째 문장의 topic
                 self.sentiments[(d, m)] = s  # d 문서의 m 번째 문장의 sentiment
                 self.ns_d[d] += 1
@@ -116,14 +127,6 @@ class ASUM:
                 for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):  # d번째 문서의 m번째 문장의 단어를 돌면서
                     self.n_wkl[w, t, s] += 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
                     self.n_kl[t, s] += 1  # topic k, senti l로 할당된 단어 수
-
-    def updateTopicVectors(self, lamda = 0.01):
-        t = self.topicVectors # (K, H)
-        for i in range(self.numTopics):
-            x0 = t[i, :]
-            x, f, d = fmin_l_bfgs_b(ot.loss, x0, fprime=ot.grad, args=(self.n_wkl, self.wordVectors, lamda), maxiter=15000)
-            t[i, :] = x
-        self.topicVectors = t
 
 
     def sampling(self, d, m):
@@ -150,15 +153,15 @@ class ASUM:
                         firstFactor[t][s] *= (betaw + i) / (beta0 + m0)
                         m0 += 1
 
-        secondFactor = (self.ns_dl[d, :] + self.alpha) / \
-                       (self.ns_d[d] + self.numTopics * self.alpha)  # dim(L x 1)
+        secondFactor = (self.ns_dkl[d, :, :] + self.alpha) / \
+                       (self.ns_dl[d] + self.numTopics * self.alpha)[np.newaxis,:] # dim(L x 1)
 
-        thirdFactor = (self.ns_dkl[d, :, :] + self.gamma) / \
-                      (self.ns_dl[d] + self.numSentiments * self.gamma)[np.newaxis, :] #(K, L)
+        thirdFactor = (self.ns_dl[d] + self.gamma) / \
+                      (self.ns_d[d] + self.numSentiments * self.gamma)
 
         prob = np.ones((self.numTopics, self.numSentiments))
-        prob *= firstFactor * thirdFactor
-        prob *= secondFactor[np.newaxis,:]
+        prob *= firstFactor * secondFactor
+        prob *= thirdFactor[np.newaxis,:]
         prob /= np.sum(prob)
 
         ind = sampleFromCategorical(prob.flatten())
@@ -190,6 +193,12 @@ class ASUM:
         thirdFactor /= thirdFactor.sum()
         return thirdFactor
 
+    def perplexity(self):
+        """
+        exp(-1 * log-likelihood per word)
+        log-likelihood =
+        :return:
+        """
 
     def getTopKWordsByLikelihood(self, K):
         """
@@ -270,7 +279,6 @@ class ASUM:
 
     def run(self, reviews, save_path, print_iter=2, save_iter = 5, maxIters=10):
         for iteration in range(maxIters):
-            self.updateTopicVectors()
             if (iteration + 1) % print_iter == 0:
                 print("Starting iteration %d of %d" % (iteration + 1, maxIters))
                 print(self.classify_senti())
