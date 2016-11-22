@@ -143,6 +143,32 @@ def sentence_postag(reviewSentence):
     tagged = nltk.pos_tag_sents(tokenize2)
     return tagged
 
+def brand2vec_preprocess(tagged_by_Sentence):
+    """
+    1. 특수문자 제거, 소문자
+    2. 숫자 제거
+    """
+    st = PorterStemmer()
+    re_special = re.compile('[^A-Za-z0-9]+')  # 문자,숫자 제외한 나머지(=특수문자)
+    re_num = re.compile('[0-9]+')  # 숫자
+    re_adj = re.compile('[JJ.*]')
+    new_sent = []
+    adjectives = [] #많이 쓰이는 형용사 목록을 찾기 위해
+    total_tokens_by_review = [] #해당 브랜드의 token 개수 새기 위해서
+    for sent in tagged_by_Sentence:
+        # text = []
+        # for sent in review:
+        #     for tup in sent:
+        #         if not bool(re_special.match(tup[0])) and not bool(re_num.match(tup[0])):
+        #             text.append((tup[0].lower(), tup[1]))
+        text = [(tup[0].lower(), tup[1]) for tup in sent if not bool(re_special.match(tup[0])) and not bool(re_num.match(tup[0]))]  # 1. 특수문자,숫자 제거, 소문자
+        tokens = [tup[0] for tup in text]
+        total_tokens_by_review.append(tokens)
+        adjective = [st.stem(tup[0]) for tup in text if re_adj.match(tup[1])]
+        adjectives.extend(adjective)
+        text = [tup[0] for tup in text]
+        new_sent.append(text)
+    return new_sent, adjectives, total_tokens_by_review
 
 def preprocessing(tagged_by_Sentence):
     """
