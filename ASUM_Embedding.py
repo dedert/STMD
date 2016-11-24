@@ -127,6 +127,60 @@ class ASUM_Embedding:
             t[i, :] = x
         self.topicVectors = t
 
+    def inference(self, d, m):
+        t = self.topics[(d, m)]
+        s = self.sentiments[(d, m)]
+        self.ns_d[d] -= 1
+        self.ns_dkl[d, t, s] -= 1
+        self.ns_dl[d, s] -= 1
+        for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):
+            self.n_wkl[w, t, s] -= 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
+            self.n_kl[t, s] -= 1  # topic k, senti l로 할당된 단어 수
+
+        firstFactor = np.ones((self.numTopics, self.numSentiments))
+
+        word_count = self.wordCountSentence[d][m]
+        for t in range(self.numTopics):
+            for s in range(self.numSentiments):
+                beta0 = self.n_kl[t][s] + self.beta
+                m0 = 0
+                for word in word_count.keys():
+                    betaw = self.n_wkl[word, t, s] + self.beta
+                    cnt = word_count[word]
+                    for i in range(cnt):
+                        firstFactor[t][s] *= (betaw + i) / (beta0 + m0)
+                        m0 += 1
+
+        secondFactor = (self.ns_dkl[d, :, :] + self.alpha) / \
+                       (self.ns_dl[d] + self.numTopics * self.alpha)[np.newaxis, :]  # dim(K x L)
+
+        thirdFactor = (self.ns_dl[d] + self.gamma) / \
+                      (self.ns_d[d] + self.numSentiments * self.gamma)  # (L,)
+
+        prob = np.ones((self.numTopics, self.numSentiments))
+        prob *= firstFactor * secondFactor
+        prob *= thirdFactor[np.newaxis, :]
+        prob /= np.sum(prob)
+
+        #원래대로 돌려놓음
+        self.topics[(d, m)] = t
+        self.sentiments[(d, m)] = s
+        self.ns_d[d] += 1
+        self.ns_dkl[d, t, s] += 1
+        self.ns_dl[d, s] += 1
+        for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):
+            self.n_wkl[w, t, s] += 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
+            self.n_kl[t, s] += 1  # topic k, senti l로 할당된 단어 수
+
+        ind = sampleFromCategorical(prob.flatten())
+        t, s = np.unravel_index(ind, prob.shape)
+
+        senti_score = self.senti_score_dict[(d, m)]
+        s2 = sampleFromCategorical(senti_score.flatten())
+        gamma = np.random.binomial(1, self.binary)
+        s = (1 - gamma) * s + gamma * s2
+        return t, s
+
 
     def sampling(self, d, m):
         t = self.topics[(d, m)]
@@ -270,6 +324,12 @@ class ASUM_Embedding:
 
     def getDocSentimentDist(self, d):
         pi = self.calculatePi()[d]
+        pi /= pi.sum()
+        wordInDocIndex = [index for index_list in self.wordCountSentence[d] for index in index_list]
+        wordVector = self.wordVectors[wordInDocIndex] # num words in Sentence x dimension
+        senti_score = np.dot(self.sentimentVector, wordVector.T).sum(axis=1) #(2,)
+        pi = (1-self.binary) * pi + self.binary * ot.softmax(senti_score)
+        pi /= pi.sum()
         return pi
 
     def getTopWordsBySenti(self, K):
