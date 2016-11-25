@@ -1,7 +1,6 @@
 import numpy as np
-import pandas as pd
+import time
 from collections import Counter
-from scipy.optimize import fmin_l_bfgs_b
 import optimizeTopicVectors as ot
 from preprocess import *
 
@@ -25,22 +24,24 @@ def word_indices(doc_sent_word_dict, sent_index):
         yield idx
 
 class ASUM_Embedding:
-    def __init__(self, wordVectors, sentimentVector, numTopics, alpha, beta, gamma, binary=0.5, max_sentence=50, numSentiments=2):
+    def __init__(self, review_label, wordVectors, sentimentVector, numTopics, alpha, beta, gamma, binary=0.5, numSentiments=2):
+        self.review_label = review_label # 각 문서의 긍정(0), 부정(1) label
         self.wordVectors = wordVectors # (V x H)
         self.numTopics = numTopics
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         self.numSentiments = numSentiments
-        self.maxSentence = max_sentence
-        self.dimension = self.wordVectors.shape[1]  # H
         self.binary = binary
         self.sentimentVector = sentimentVector # (L x H)
 
-    def build_dataset(self, reviews, sentiment_list):
+    def build_dataset(self, reviews):
         """
         :param reviews: 리뷰 데이터 [ [[문서1의 문장1],[문서1의 문장2]], [[문서2의 문장1],[문서2의 문장2]], ...]]
         :return:
+        word2idx - key: word, value: index
+        idx2word - key: index, value: word
+        doc_sent_word_dict -
         """
         corpus = [word for review in reviews for sentence in review for word in sentence]
         text = nltk.Text(corpus)
@@ -54,7 +55,6 @@ class ASUM_Embedding:
         doc_sent_word_dict = {}  # key: 문서 index, value : [[list of sent1 단어의 index], [list of sent2 단어의 index]...]
         numSentence = {}  # key : 문서 index, value : 해당 문서의 문장수
         wordCountSentence = {}  # key : 문서 index, value : 해당 문서의 각 문장별 word count
-        docSentiment = {}
         for index, review in enumerate(reviews):
             doc_sent_lst = []
             doc_sent_count = []
@@ -66,19 +66,14 @@ class ASUM_Embedding:
             numSentence[index] = len(doc_sent_lst)
             doc_sent_word_dict[index] = doc_sent_lst
             wordCountSentence[index] = doc_sent_count
-            docSentiment[index] = sentiment_list[index]
 
-        return word2idx, idx2word, doc_sent_word_dict, wordCountSentence, numSentence, docSentiment
+        return word2idx, idx2word, doc_sent_word_dict, wordCountSentence, numSentence
 
-    def _initialize_(self, reviews, pos_neg_sentence_indices, pos_neg_sentiment_label, sentiment_list):
+    def _initialize_(self, reviews):
         self.word2idx, self.idx2word, self.doc_sent_word_dict, self.wordCountSentence, \
-        self.numSentence, self.docSentiment = self.build_dataset(reviews, sentiment_list)
+        self.numSentence = self.build_dataset(reviews)
         self.numDocs = len(self.doc_sent_word_dict.keys())
         self.vocabSize = len(self.word2idx.keys())
-        self.pos_neg_sentence_indices = pos_neg_sentence_indices
-        self.pos_neg_sentiment_label = pos_neg_sentiment_label
-        self.topicVectors = ot.orthogonal_matrix((self.numTopics, self.dimension))
-
 
         # Pseudocounts
         self.n_wkl = np.zeros((self.vocabSize, self.numTopics, self.numSentiments))  # 단어 i가 topic k, senti l로 할당된 수
@@ -95,9 +90,6 @@ class ASUM_Embedding:
 
         for d in range(self.numDocs):
             topicDistribution = sampleFromDirichlet(alphaVec)
-            # topic_similarity = ot.softmax(np.dot(self.topicVectors,
-            #                                      self.wordVectors[
-            #                                          self.doc_sent_word_dict[d][m]].T))  # ( K x num words in sentence)
             sentimentDistribution = np.zeros((self.numTopics, self.numSentiments))
 
             for t in range(self.numTopics):
@@ -108,8 +100,7 @@ class ASUM_Embedding:
                 pos_score = np.dot(self.sentimentVector,
                                    self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1)
                 s = np.argmax(pos_score)
-                self.senti_score_dict[(d, m)] = ot.softmax(
-                    np.dot(self.sentimentVector, self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1))
+                self.senti_score_dict[(d, m)] = ot.softmax(pos_score)
                 self.topics[(d, m)] = t  # d 문서의 m번째 문장의 topic
                 self.sentiments[(d, m)] = s  # d 문서의 m 번째 문장의 sentiment
                 self.ns_d[d] += 1
@@ -119,13 +110,7 @@ class ASUM_Embedding:
                     self.n_wkl[w, t, s] += 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
                     self.n_kl[t, s] += 1  # topic k, senti l로 할당된 단어 수
 
-    def updateTopicVectors(self, lamda = 0.01):
-        t = self.topicVectors # (K, H)
-        for i in range(self.numTopics):
-            x0 = t[i, :]
-            x, f, d = fmin_l_bfgs_b(ot.loss, x0, fprime=ot.grad, args=(self.n_wkl, self.wordVectors, lamda), maxiter=15000)
-            t[i, :] = x
-        self.topicVectors = t
+
 
     def inference(self, d, m):
         t = self.topics[(d, m)]
@@ -177,7 +162,7 @@ class ASUM_Embedding:
 
         senti_score = self.senti_score_dict[(d, m)]
         s2 = sampleFromCategorical(senti_score.flatten())
-        gamma = np.random.binomial(1, self.binary)
+        gamma = np.random.binomial(1, self.binary) #binary가 0이면 항상 0만 추출
         s = (1 - gamma) * s + gamma * s2
         return t, s
 
@@ -206,21 +191,8 @@ class ASUM_Embedding:
                         firstFactor[t][s] *= (betaw + i) / (beta0 + m0)
                         m0 += 1
 
-        # topic_similarity = ot.softmax(np.dot(self.topicVectors,
-        #                                      self.wordVectors[
-        #                                          self.doc_sent_word_dict[d][m]].T))  # ( K x num words in sentence)
-        # senti_similarity = ot.softmax(np.dot(self.sentimentVector,
-        #                                      self.wordVectors[
-        #                                          self.doc_sent_word_dict[d][m]].T))  # ( L x num words in sentence)
-        # vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T))
-
-        # senti_similarity = np.dot(self.sentimentVector,
-        #                           self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1)  # ( L, )
-
         secondFactor = (self.ns_dkl[d, :, :] + self.alpha) / \
                        (self.ns_dl[d] + self.numTopics * self.alpha)[np.newaxis,:]  # dim(K x L)
-
-        # secondFactor = (1-self.binary) * secondFactor + (self.binary) * senti_similarity[:,np.newaxis]
 
         thirdFactor = (self.ns_dl[d] + self.gamma) / \
                       (self.ns_d[d] + self.numSentiments * self.gamma) #(L,)
@@ -233,14 +205,9 @@ class ASUM_Embedding:
         ind = sampleFromCategorical(prob.flatten())
         t, s = np.unravel_index(ind, prob.shape)
 
-        # topic_score = ot.softmax(np.dot(self.topicVectors,self.wordVectors[self.doc_sent_word_dict[d][m]].T)).sum(axis=1) #(K x 1)
-        #
-        # t2 = sampleFromCategorical(topic_score.flatten())
-        # t = t2
-        # senti_score = ot.softmax(np.dot(self.sentimentVector, self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1))  # ( L, )
         senti_score = self.senti_score_dict[(d, m)]
         s2 = sampleFromCategorical(senti_score.flatten())
-        gamma = np.random.binomial(1,self.binary)
+        gamma = np.random.binomial(1, self.binary)
         s = (1-gamma) * s + gamma * s2
         self.topics[(d, m)] = t
         self.sentiments[(d, m)] = s
@@ -254,16 +221,6 @@ class ASUM_Embedding:
     def calculatePhi(self):
         firstFactor = (self.n_wkl + self.beta) / \
                       np.expand_dims(self.n_kl + self.n_wkl.shape[0] * self.beta, axis=0)
-
-        # topic_similarity = ot.softmax(np.dot(self.topicVectors,
-        #                                      self.wordVectors.T))  # ( K x V)
-        # senti_similarity = ot.softmax(np.dot(self.sentimentVector,
-        #                                      self.wordVectors.T))  # ( L x V)
-        # vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T)) # K x L
-        # senti_similarity = ot.softmax(np.dot(self.sentimentVector,
-        #                                      self.wordVectors.T)) # (L, V)
-        #
-        # firstFactor = firstFactor * np.expand_dims(senti_similarity, axis=1)
         firstFactor /= firstFactor.sum()
         return firstFactor
 
@@ -280,44 +237,6 @@ class ASUM_Embedding:
         return thirdFactor
 
 
-    def getTopKWordsByLikelihood(self, K):
-        """
-        Returns top K discriminative words for topic t and sentiment s
-        ie words v for which p(t, s | v) is maximum
-        """
-        pseudocounts = np.copy(self.n_wkl)
-        normalizer = np.sum(pseudocounts, (1, 2))
-        pseudocounts /= normalizer[:, np.newaxis, np.newaxis]
-        for t in range(self.numTopics):
-            for s in range(self.numSentiments):
-                topWordIndices = pseudocounts[:, t, s].argsort()[-1:-(K + 1):-1]
-                print(t, s, [self.idx2word[i] for i in topWordIndices])
-
-    def getTopKWordsByTS(self, K):
-        """
-        K 개 sentiment별 top words
-        """
-        topic_sentiment_arr = self.calculatePhi()
-        dic = {}
-        for t in range(self.numTopics):
-            for s in range(self.numSentiments):
-                index_list = np.argsort(-topic_sentiment_arr[:, t, s])[:K]
-                if s == 0:
-                    name = "p"
-                else:
-                    name = "n"
-                dic['topic_' + '{:02d}'.format(t + 1) + '_' + name] = [self.idx2word[index] for index in index_list]
-        return pd.DataFrame(dic)
-
-    def getTopKWordsByTopic(self, K):
-        dic = {}
-        phi = self.calculatePhi()
-        topic_arr = np.sum(phi, (2))
-        for t in range(self.numTopics):
-            index_list = np.argsort(-topic_arr[:, t])[:K]
-            dic["Topic"+str(t+1)] = [self.idx2word[index] for index in index_list]
-        return pd.DataFrame(dic)
-
     def getTopicSentimentDist(self, d):
         theta = self.calculateTheta()[d]
         return theta
@@ -325,34 +244,18 @@ class ASUM_Embedding:
     def getDocSentimentDist(self, d):
         pi = self.calculatePi()[d]
         pi /= pi.sum()
-        wordInDocIndex = [index for index_list in self.wordCountSentence[d] for index in index_list]
-        wordVector = self.wordVectors[wordInDocIndex] # num words in Sentence x dimension
-        senti_score = np.dot(self.sentimentVector, wordVector.T).sum(axis=1) #(2,)
-        pi = (1-self.binary) * pi + self.binary * ot.softmax(senti_score)
-        pi /= pi.sum()
+        # doc_sent_word_dict = self.doc_sent_word_dict
+        # wordInDocIndex = [index for index_list in doc_sent_word_dict[d] for index in index_list]
+        # wordVector = self.wordVectors[wordInDocIndex] # num words in Sentence x dimension
+        # senti_score = np.dot(self.sentimentVector, wordVector.T).sum(axis=1) #(2,)
+        # pi = (1-self.binary) * pi + self.binary * ot.softmax(senti_score)
+        # pi /= pi.sum()
         return pi
 
-    def getTopWordsBySenti(self, K):
-        dic = {}
-        phi = self.calculatePhi()
-        senti_arr = np.sum(phi, (1))
-        for s in range(self.numSentiments):
-            index_list = np.argsort(-senti_arr[:, s])[:K]
-            if s == 0:
-                name = "p"
-            else:
-                name = "n"
-            dic["Sentiment_"+ name] = [self.idx2word[index] for index in index_list]
-        return pd.DataFrame(dic)
-
     def classify_senti(self):
-        doc_sent_inference = []
-        for i in range(self.numDocs):
-            if i in self.pos_neg_sentence_indices:
-                doc_sent_inference.append(np.argmax(self.getDocSentimentDist(i)))
-        infer_arr = np.array(doc_sent_inference)
-        answer = np.array(self.pos_neg_sentiment_label)
-        return np.mean(infer_arr == answer)
+        inference = np.argmax(self.calculatePi(), axis=1)  # (D x L)
+        answer = np.array(self.review_label)
+        return np.mean(inference == answer)
 
     def save(self, iteration, path):
         phi = self.calculatePhi()
@@ -363,11 +266,11 @@ class ASUM_Embedding:
         np.save(name + "_theta", theta)
         np.save(name + "_pi", pi)
 
-    def run(self, reviews, save_path, print_iter=2, save_iter = 5, maxIters=10):
+    def run(self, save_path, print_iter=2, save_iter = 5, maxIters=10):
         for iteration in range(maxIters):
-            self.updateTopicVectors()
+            start = time.time()
             if (iteration + 1) % print_iter == 0:
-                print("Starting iteration %d of %d" % (iteration + 1, maxIters))
+                print("Starting iteration %d of %d:" % (iteration + 1, maxIters))
                 print(self.classify_senti())
             if (iteration + 1) % save_iter == 0:
                 print("Starting save model")
@@ -376,4 +279,24 @@ class ASUM_Embedding:
             for d in range(self.numDocs):
                 for m in range(self.numSentence[d]):
                     self.sampling(d, m)
+            end = time.time()
+            print("iteration %s, time %i"%(iteration+1,end-start))
+    # def updateTopicVectors(self, lamda = 0.01):
+    #     t = self.topicVectors # (K, H)
+    #     for i in range(self.numTopics):
+    #         x0 = t[i, :]
+    #         x, f, d = fmin_l_bfgs_b(ot.loss, x0, fprime=ot.grad, args=(self.n_wkl, self.wordVectors, lamda), maxiter=15000)
+    #         t[i, :] = x
+    #     self.topicVectors = t
 
+
+    # topic_similarity = ot.softmax(np.dot(self.topicVectors,
+    #                                      self.wordVectors[
+    #                                          self.doc_sent_word_dict[d][m]].T))  # ( K x num words in sentence)
+    # senti_similarity = ot.softmax(np.dot(self.sentimentVector,
+    #                                      self.wordVectors[
+    #                                          self.doc_sent_word_dict[d][m]].T))  # ( L x num words in sentence)
+    # vector_similarity = ot.softmax(np.dot(topic_similarity, senti_similarity.T))
+
+    # senti_similarity = np.dot(self.sentimentVector,
+    #                           self.wordVectors[self.doc_sent_word_dict[d][m]].T).sum(axis=1)  # ( L, )

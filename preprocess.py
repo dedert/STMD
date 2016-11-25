@@ -2,47 +2,47 @@ from gensim.models import Phrases
 from gensim.models.doc2vec import TaggedDocument
 import nltk
 
-def prepare(data, col_name ='preprocessed'):
+def prepare(data, col_name ='preprocessed', max_sentence = 50):
     """
     전처리 완료된 문서에서(after raw_preprocess)
     기본적인 자료구조 생성
-    :param data: 특정 브랜드(리뷰)의 dataframe
+    :param data: 특정 브랜드(리뷰)의 dataframe, 긍정(4점 이상), 부정(2점 이하)
     :param col_name: 전처리 된 데이터가 들어있는 column name
-    :return: documents, sentence_list, sentence_senti_label, sentence_position, numSentence
+    :param max_sentence: 한 리뷰당 maximum number of sentence
+    :return sentence_list: sentence를 담은 list
+    :return sentence_senti_label: 각 sentence 단위의 긍정, 부정 label
+    :return numSentence:
     """
     sentence_list = [] #문장단위 list
-    sentiment_label = []  # 각 문장의 긍, 부정 index
-    sentence_senti_label = {} #각 문장의 긍,부정 label
-    pos_neg_sentence_indices = []  # 긍, 부정 문장의 index, 중립은 None -> 나중에 긍,부정리뷰 안에 있는 문장만 추출하기 위해
-    pos_neg_sentiment_label = [] #sentiment_label에 해당하는 문장의 긍,부정 labe(1:긍정, 0:부정)
+    review_label = []  # 각 리뷰의 긍, 부정 index
     numSentence = {} #key : doc_index, value : num of sentences in doc_index
     index = 0
     for doc_index, row in data.iterrows():
-        sentence_list.extend(row['preprocessed'])
-        numSentence[doc_index] = len(row[col_name])
-        if row['overall']>=4:
-            pos_neg_sentence_indices.append(doc_index)
-            pos_neg_sentiment_label.append(0)
-            sentiment_label.append(0)
-            for i in row[col_name]:
-                sentence_senti_label[index]='positive'
-                index += 1
-        elif row['overall'] == 3:
-            pos_neg_sentence_indices.append(None)
-            sentiment_label.append(0)
-            for i in row[col_name]:
-                sentence_senti_label[index]='neutral'
-                index += 1
-        else:
-            pos_neg_sentence_indices.append(doc_index)
-            pos_neg_sentiment_label.append(1)
-            sentiment_label.append(1)
-            for i in row[col_name]:
-                sentence_senti_label[index]='negative'
-                index += 1
-    return sentence_list, sentiment_label, sentence_senti_label, pos_neg_sentence_indices, pos_neg_sentiment_label, numSentence
+        if row['overall'] >= 4:
+            review_label.append(0)
+            if row['sent_length'] >= max_sentence:
+                sentence_list.extend(row['preprocessed'][:max_sentence])
+                numSentence[doc_index] = max_sentence
+                index += len(row[col_name])
+            else:
+                sentence_list.extend(row['preprocessed'])
+                numSentence[doc_index] = len(row[col_name])
+                index += len(row[col_name])
 
-def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, max_vocab = 5000, threshold = 10, min_count=5):
+        elif row['overall'] <= 2:
+            review_label.append(1)
+            if row['sent_length'] >= max_sentence:
+                sentence_list.extend(row['preprocessed'][:max_sentence])
+                numSentence[doc_index] = max_sentence
+                index += len(row[col_name])
+            else:
+                sentence_list.extend(row['preprocessed'])
+                numSentence[doc_index] = len(row[col_name])
+                index += len(row[col_name])
+
+    return sentence_list, review_label, numSentence
+
+def bigram_and_sentence(sentence_list, review_label, numSentence, max_vocab = 5000, threshold = 10, min_count=5):
     """
     sentence 만 들어있는 list(flatten)를 다시 문서, 문장모양의 list로 변환
     :param sentence_list: 문장 list
@@ -56,8 +56,7 @@ def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, max_vo
     total_token = []
     count = 0
     for i in range(numDocs):
-        num_sentence = numSentence[i]
-        for num_s in range(num_sentence):
+        for num_s in range(numSentence[i]):
             total_token.append(bigram[sentence_list[count]])
             count += 1
 
@@ -70,21 +69,23 @@ def bigram_and_sentence(sentence_senti_label, sentence_list, numSentence, max_vo
     sentence_list_again = []
     documents_label = []
     count = 0
+
     for i in range(numDocs):
-        num_sentence = numSentence[i]
         doc_list = []
-        for num_s in range(num_sentence):
+        documents_label.append(review_label[i])
+        for num_s in range(numSentence[i]):
             bi = bigram[sentence_list[count]]
+            count += 1
             bi = [word for word in bi if word in keywords]  # keywords에 속한 단어만 추출
             if len(bi) >= 1: #문장 길이가 1 이상인 것만 추출
                 doc_list.append(bi)
-                document = TaggedDocument(words=bi, tags=[sentence_senti_label[count]])
-                documents_label.append(sentence_senti_label[count])
+                if review_label[i] == 0:
+                    tags = "positive"
+                else:
+                    tags = "negative"
+                document = TaggedDocument(words = bi, tags=[tags])
                 documents.append(document)
-                total_token.append(bi)
-            count += 1
         sentence_list_again.append(doc_list)
-
     return documents, sentence_list_again, bigram, documents_label
 
 
