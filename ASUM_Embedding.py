@@ -1,17 +1,17 @@
 import numpy as np
+import pandas as pd
 import time
 from collections import Counter
 import optimizeTopicVectors as ot
 from preprocess import *
+from sklearn.feature_extraction.text import TfidfTransformer
 
 def sampleFromDirichlet(alpha):
     return np.random.dirichlet(alpha)
 
-
 def sampleFromCategorical(theta):
     # theta = theta / np.sum(theta)
     return np.random.multinomial(1, theta).argmax()
-
 
 def word_indices(doc_sent_word_dict, sent_index):
     """
@@ -109,7 +109,6 @@ class ASUM_Embedding:
                 for i, w in enumerate(word_indices(self.doc_sent_word_dict[d], m)):  # d번째 문서의 m번째 문장의 단어를 돌면서
                     self.n_wkl[w, t, s] += 1  # w번째 단어가 topic은 t, sentiment s로 할당된 개수
                     self.n_kl[t, s] += 1  # topic k, senti l로 할당된 단어 수
-
 
 
     def inference(self, d, m):
@@ -244,12 +243,6 @@ class ASUM_Embedding:
     def getDocSentimentDist(self, d):
         pi = self.calculatePi()[d]
         pi /= pi.sum()
-        # doc_sent_word_dict = self.doc_sent_word_dict
-        # wordInDocIndex = [index for index_list in doc_sent_word_dict[d] for index in index_list]
-        # wordVector = self.wordVectors[wordInDocIndex] # num words in Sentence x dimension
-        # senti_score = np.dot(self.sentimentVector, wordVector.T).sum(axis=1) #(2,)
-        # pi = (1-self.binary) * pi + self.binary * ot.softmax(senti_score)
-        # pi /= pi.sum()
         return pi
 
     def classify_senti(self):
@@ -258,29 +251,66 @@ class ASUM_Embedding:
         return np.mean(inference == answer)
 
     def save(self, iteration, path):
+        """
+        phi, theta, pi 및 probWords 추출.
+        probWords는 phi를 이용하여 각 토픽에서 해당 단어가 등장한 빈도를 상대적으로 많이 등장한 단어(TF-IDF)로 추출
+        :param iteration: 몇번째에서 저장했는지
+        :param path: 저장 path
+        :return:
+        """
         phi = self.calculatePhi()
         theta = self.calculateTheta()
         pi = self.calculatePi()
-        name = path + "_topic_" + '{:03d}'.format(self.numTopics) + '_iter_' + str(iteration+1)
+        name = path + "T{:d}-B{:.1f}-I{:d}".format(self.numTopics, self.binary, iteration)
         np.save(name + "_phi", phi)
         np.save(name + "_theta", theta)
         np.save(name + "_pi", pi)
 
-    def run(self, save_path, print_iter=2, save_iter = 5, maxIters=10):
+        total_topic_num = self.numTopics * self.numSentiments
+        count = np.zeros((total_topic_num, self.vocabSize))
+        col_name = []
+        idx = 0
+        for l in range(self.numSentiments):
+            for t in range(self.numTopics):
+                name = 'T' + str(t) + '-' + 'S' + str(l)
+                count[idx] = self.n_wkl[:, t, l]
+                idx += 1
+                col_name.append(name)
+        # TF-IDF
+        transformer = TfidfTransformer()
+        tfidf = transformer.fit_transform(count)
+        score_result = tfidf.toarray()
+
+        max_vocab_size = len(self.idx2word.keys())
+        word_list = [self.idx2word[idx] for idx in range(max_vocab_size)] #max vocab size
+        df_result = pd.DataFrame()
+        for i in range(total_topic_num):
+            scores = score_result[i]
+            word_score_list = []
+            for word, score in zip(word_list, scores):
+                word_score = tuple((word, score))
+                word_score_list.append(word_score)
+            word_score_list = sorted(word_score_list, key=lambda x: -x[1])
+            df_result[col_name[i]] = word_score_list
+        name = path + "T{:d}-B{:.1f}-I{:d}".format(self.numTopics, self.binary, iteration)
+        df_result.to_csv(name + "_probWords.csv", index=False)
+        print("%s model saved"%name)
+
+    def run(self, save_path, print_iter=2, maxIters=10):
         for iteration in range(maxIters):
             start = time.time()
             if (iteration + 1) % print_iter == 0:
                 print("Starting iteration %d of %d:" % (iteration + 1, maxIters))
                 print(self.classify_senti())
-            if (iteration + 1) % save_iter == 0:
-                print("Starting save model")
-                self.save(iteration, save_path)
 
             for d in range(self.numDocs):
                 for m in range(self.numSentence[d]):
                     self.sampling(d, m)
             end = time.time()
-            print("iteration %s, time %i"%(iteration+1,end-start))
+            print("iteration %s, time %.4f" % (iteration+1,end-start))
+        self.save(iteration, save_path)
+
+
     # def updateTopicVectors(self, lamda = 0.01):
     #     t = self.topicVectors # (K, H)
     #     for i in range(self.numTopics):
